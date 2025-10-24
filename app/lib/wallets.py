@@ -505,7 +505,7 @@ class WalletTransaction(Transaction):
                     u.spent = True
 
             self.hdwallet._commit()
-            self.hdwallet._balance_update(network=self.network.name)
+            self.hdwallet._balance_update()
             return None
         self.error = "Transaction not send, unknown response from service providers"
 
@@ -1506,96 +1506,69 @@ class Wallet(object):
             strict=self.strict
         )
 
-    def balance(self, account_id=None, network=None, as_string=False):
-        self._balance_update(account_id, network)
-        network, account_id, _ = self._get_account_defaults(network, account_id)
-
-        balance = 0
-        b_res = [b['balance'] for b in self._balances if b['account_id'] == account_id and b['network'] == network]
-        if len(b_res):
-            balance = b_res[0]
+    def balance(self, as_string=False):
+        self._balance_update()
+        balance = self._balance
         if as_string:
-            return Value.from_satoshi(balance, network=network).str_unit()
-        else:
-            return float(balance)
+            return str(balance)
+        return float(balance)
 
-    def _balance_update(self, account_id=None, network=None, key_id=None, min_confirms=config['MIN_CONFIRMS']):
-        qr = self.session.query(DbTransactionOutput, func.sum(DbTransactionOutput.value), DbTransaction.network_name,
-                                 DbTransaction.account_id).\
-            join(DbTransaction). \
-            filter(DbTransactionOutput.spent.is_(False),
-                   DbTransaction.wallet_id == self.wallet_id,
-                   DbTransaction.confirmations >= min_confirms)
-        if account_id is not None:
-            qr = qr.filter(DbTransaction.account_id == account_id)
-        if network is not None:
-            qr = qr.filter(DbTransaction.network_name == network)
+    def _balance_update(self, key_id=None, min_confirms=config['MIN_CONFIRMS']):
+        qr = (
+            self.session.query(
+                DbTransactionOutput,
+                func.sum(DbTransactionOutput.value)
+            )
+            .join(DbTransaction)
+            .filter(
+                DbTransactionOutput.spent.is_(False),
+                DbTransaction.wallet_id == self.wallet_id,
+                DbTransaction.confirmations >= min_confirms
+                )
+        )
         if key_id is not None:
             qr = qr.filter(DbTransactionOutput.key_id == key_id)
         else:
             qr = qr.filter(DbTransactionOutput.key_id.isnot(None))
-        utxos = qr.group_by(
-            DbTransactionOutput.key_id,
-            DbTransactionOutput.transaction_id,
-            DbTransactionOutput.output_n,
-            DbTransaction.network_name,
-            DbTransaction.account_id
-        ).all()
-
+        utxos = (
+            qr.group_by(
+                DbTransactionOutput.key_id,
+                DbTransactionOutput.transaction_id,
+                DbTransactionOutput.output_n,
+            ).all()
+        )
         key_values = [
             {
                 'id': utxo[0].key_id,
-                'network': utxo[2],
-                'account_id': utxo[3],
                 'balance': utxo[1]
             }
             for utxo in utxos
         ]
-
-        grouper = itemgetter("id", "network", "account_id")
         key_balance_list = []
-        for key, grp in groupby(sorted(key_values, key=grouper), grouper):
-            nw_acc_dict = dict(zip(["id", "network", "account_id"], key))
-            nw_acc_dict["balance"] = sum(item["balance"] for item in grp)
-            key_balance_list.append(nw_acc_dict)
+        for key_id, grp in groupby(sorted(key_values, key=itemgetter("id")), key=itemgetter("id")):
+            key_balance_list.append({
+                'id': key_id,
+                'balance': sum(item["balance"] for item in grp)
+            })
 
-        grouper = itemgetter("network", "account_id")
-        balance_list = []
-        for key, grp in groupby(sorted(key_balance_list, key=grouper), grouper):
-            nw_acc_dict = dict(zip(["network", "account_id"], key))
-            nw_acc_dict["balance"] = sum(item["balance"] for item in grp)
-            balance_list.append(nw_acc_dict)
-
-        # Add keys with no UTXO's with 0 balance
-        for key in self.keys(account_id=account_id, network=network, key_id=key_id):
+        for key in self.keys(key_id=key_id):
             if key.id not in [utxo[0].key_id for utxo in utxos]:
                 key_balance_list.append({
                     'id': key.id,
-                    'network': network,
-                    'account_id': key.account_id,
                     'balance': 0
                 })
 
-        if not key_id:
-            for bl in balance_list:
-                bl_item = [b for b in self._balances if
-                           b['network'] == bl['network'] and b['account_id'] == bl['account_id']]
-                if not bl_item:
-                    self._balances.append(bl)
-                    continue
-                lx = self._balances.index(bl_item[0])
-                self._balances[lx].update(bl)
+        self._balance = sum(item["balance"] for item in key_balance_list)
 
-        self._balance = sum([b['balance'] for b in balance_list if b['network'] == self.network.name])
-
-        # Bulk update database
         for kb in key_balance_list:
             if kb['id'] in self._key_objects:
                 self._key_objects[kb['id']]._balance = kb['balance']
+
         self.session.bulk_update_mappings(DbKey, key_balance_list)
         self._commit()
         _logger.info("Got balance for %d key(s)" % len(key_balance_list))
-        return self._balances
+        return self._balance
+
 
     def utxos(self, account_id=None, network=None, min_confirms=0, key_id=None):
         first_key_id = key_id
@@ -1728,7 +1701,7 @@ class Wallet(object):
 
         self.last_updated = last_updated
         self._commit()
-        self._balance_update(account_id=account_id, network=network, key_id=key_id)
+        self._balance_update(key_id=key_id)
 
         return len(txs)
 
