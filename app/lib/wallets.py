@@ -560,27 +560,27 @@ class WalletTransaction(Transaction):
 
     def store(self, commit=True):
         sess = self.hdwallet.session
+        wallet_id = self.hdwallet.wallet_id
 
         # --- Find or create transaction ---
+        txid_bytes = bytes.fromhex(self.txid)
         db_tx = sess.query(DbTransaction).filter(
-            DbTransaction.wallet_id == self.hdwallet.wallet_id,
-            DbTransaction.txid == bytes.fromhex(self.txid)
+            DbTransaction.wallet_id == wallet_id,
+            DbTransaction.txid == txid_bytes
         ).one_or_none()
 
         if not db_tx:
             db_tx = sess.query(DbTransaction).filter(
                 DbTransaction.wallet_id.is_(None),
-                DbTransaction.txid == bytes.fromhex(self.txid)
+                DbTransaction.txid == txid_bytes
             ).first()
             if db_tx:
-                db_tx.wallet_id = self.hdwallet.wallet_id
-
-        _logger.warning("start store receive DbTransaction")
+                db_tx.wallet_id = wallet_id
 
         if not db_tx:
             db_tx = DbTransaction(
-                wallet_id=self.hdwallet.wallet_id,
-                txid=bytes.fromhex(self.txid),
+                wallet_id=wallet_id,
+                txid=txid_bytes,
                 block_height=self.block_height,
                 size=self.size,
                 confirmations=self.confirmations,
@@ -602,7 +602,6 @@ class WalletTransaction(Transaction):
             sess.add(db_tx)
             notify_shkeeper('BTC', self.txid)
         else:
-            # --- Update existing transaction ---
             db_tx.block_height = self.block_height or db_tx.block_height
             db_tx.confirmations = self.confirmations or db_tx.confirmations
             db_tx.date = self.date or db_tx.date
@@ -617,30 +616,30 @@ class WalletTransaction(Transaction):
 
         # --- Ensure transaction has ID ---
         if not db_tx.id:
-            sess.flush()  # assign id without committing
+            sess.flush()
         txidn = db_tx.id
-        assert txidn, "Transaction ID not set after flush!"
-
-        if commit:
-            self.hdwallet._commit()
-
-        _logger.warning("finished store receive DbTransaction")
+        assert txidn
 
         # --- Store inputs ---
-        _logger.warning("start store inputs")
+        addresses = [ti.address for ti in self.inputs]
+        keys = {k.address: k for k in sess.query(DbKey).filter(DbKey.wallet_id == wallet_id, DbKey.address.in_(addresses))}
+        input_indices = [ti.index_n for ti in self.inputs]
+        existing_inputs = {ti.index_n: ti for ti in sess.query(DbTransactionInput)
+                        .filter(DbTransactionInput.transaction_id == txidn,
+                                DbTransactionInput.index_n.in_(input_indices))}
+
+        new_inputs = []
         for ti in self.inputs:
-            tx_key = sess.query(DbKey).filter_by(wallet_id=self.hdwallet.wallet_id, address=ti.address).one_or_none()
+            tx_key = keys.get(ti.address)
             key_id = tx_key.id if tx_key else None
             if tx_key:
                 tx_key.used = True
 
-            tx_input = sess.query(DbTransactionInput).filter_by(
-                transaction_id=txidn, index_n=ti.index_n
-            ).one_or_none()
-
+            tx_input = existing_inputs.get(ti.index_n)
             witnesses = int_to_varbyteint(len(ti.witnesses)) + b''.join([bytes(varstr(w)) for w in ti.witnesses])
+
             if not tx_input:
-                sess.add(DbTransactionInput(
+                new_inputs.append(DbTransactionInput(
                     transaction_id=txidn,
                     output_n=ti.output_n_int,
                     key_id=key_id,
@@ -666,24 +665,27 @@ class WalletTransaction(Transaction):
                     tx_input.script = ti.unlocking_script
                 tx_input.witnesses = witnesses
 
-        if commit:
-            self.hdwallet._commit()
-        _logger.warning("finished store inputs")
+        if new_inputs:
+            sess.add_all(new_inputs)
 
         # --- Store outputs ---
-        _logger.warning("start store outputs")
+        addresses_out = [to.address for to in self.outputs]
+        keys_out = {k.address: k for k in sess.query(DbKey).filter(DbKey.wallet_id == wallet_id, DbKey.address.in_(addresses_out))}
+        output_indices = [to.output_n for to in self.outputs]
+        existing_outputs = {to.output_n: to for to in sess.query(DbTransactionOutput)
+                            .filter(DbTransactionOutput.transaction_id == txidn,
+                                    DbTransactionOutput.output_n.in_(output_indices))}
+
+        new_outputs = []
         for to in self.outputs:
-            tx_key = sess.query(DbKey).filter_by(wallet_id=self.hdwallet.wallet_id, address=to.address).one_or_none()
+            tx_key = keys_out.get(to.address)
             key_id = tx_key.id if tx_key else None
             if tx_key:
                 tx_key.used = True
 
-            tx_output = sess.query(DbTransactionOutput).filter_by(
-                transaction_id=txidn, output_n=to.output_n
-            ).one_or_none()
-
+            tx_output = existing_outputs.get(to.output_n)
             if not tx_output:
-                sess.add(DbTransactionOutput(
+                new_outputs.append(DbTransactionOutput(
                     transaction_id=txidn,
                     output_n=to.output_n,
                     key_id=key_id,
@@ -700,11 +702,14 @@ class WalletTransaction(Transaction):
                 if to.spent is not None:
                     tx_output.spent = to.spent
 
+        if new_outputs:
+            sess.add_all(new_outputs)
+
         if commit:
             self.hdwallet._commit()
-        _logger.warning("finished store outputs")
 
         return txidn
+
 
     def info(self):
         Transaction.info(self)
