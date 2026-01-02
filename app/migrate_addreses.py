@@ -214,7 +214,6 @@ def _migrate_btc():
     app = create_app()
     app.app_context().push()
     coin_wallet = CoinWallet()
-    wallet = coin_wallet.wallet()
     from app.lib.wallets import Wallet, DbWallet, wallets_list, wallet_delete, db
 
     if is_descriptor():
@@ -323,8 +322,7 @@ def _migrate_ltc():
         print(f"{SRC} not found, skipping copy")
     except PermissionError:
         print(f"Permission denied copying {SRC} → {DST}")
-    print("LTC migration is not implemented yet")
-    litcoind_cmd = [
+    litecoind_cmd = [
         "litecoind",
         f"-datadir={TMP_DATADIR}",
         "-server",
@@ -346,15 +344,14 @@ def _migrate_ltc():
     logger.info('migrate_addreses')
     print("migrate_addreses")
     time.sleep(20)
-    litcoind_proc = subprocess.Popen(litcoind_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    litecoind_proc = subprocess.Popen(litecoind_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
 
     time.sleep(20)
-    print("litcoind_proc")
+    print("litecoind_proc")
     from app import create_app
     app = create_app()
     app.app_context().push()
     ltc_wallet = CoinWallet()
-    wallet = ltc_wallet.wallet()
     from app.lib.wallets import Wallet, DbWallet, wallets_list, wallet_delete, db
     print("legacy")
     print("time_wallet_created")
@@ -416,8 +413,8 @@ def _migrate_ltc():
     )
     ltc_wallet.session.add(new_var)
     ltc_wallet.session.commit()
-    litcoind_proc.terminate()
-    litcoind_proc.wait()
+    litecoind_proc.terminate()
+    litecoind_proc.wait()
     if os.path.exists(TMP_DATADIR):
         shutil.rmtree(TMP_DATADIR, ignore_errors=True)
         print(f"Removed temporary directory {TMP_DATADIR}")
