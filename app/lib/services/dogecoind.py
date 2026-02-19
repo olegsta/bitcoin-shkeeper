@@ -225,24 +225,24 @@ class DogecoindClient(BaseClient):
                 if address in addrs:
                     matched = True
                     break
-                if not matched and addrs in fixed_addresses:
-                    for vin in tx.get('vin', []):
-                        prev_txid = vin.get('txid')
-                        prev_vout_index = vin.get('vout')
+                # if not matched and addrs in fixed_addresses:
+                #     for vin in tx.get('vin', []):
+                #         prev_txid = vin.get('txid')
+                #         prev_vout_index = vin.get('vout')
 
-                        if prev_txid is None or prev_vout_index is None:
-                            continue
+                #         if prev_txid is None or prev_vout_index is None:
+                #             continue
 
-                        try:
-                            prev_tx = self.proxy.getrawtransaction(prev_txid, 1)
-                            prev_vout = prev_tx['vout'][prev_vout_index]
-                            addrs = prev_vout.get('scriptPubKey', {}).get('addresses', [])
-                        except Exception:
-                            continue
+                #         try:
+                #             prev_tx = self.proxy.getrawtransaction(prev_txid, 1)
+                #             prev_vout = prev_tx['vout'][prev_vout_index]
+                #             addrs = prev_vout.get('scriptPubKey', {}).get('addresses', [])
+                #         except Exception:
+                #             continue
 
-                        if address in addrs:
-                            matched = True
-                            break
+                #         if address in addrs:
+                #             matched = True
+                #             break
 
             if not matched:
                 continue

@@ -32,6 +32,7 @@ elif COIN == "DOGE":
     RPC_PORT = "19332"
 else:
     raise ValueError(f"Unsupported coin: {COIN}")
+
 DUMP_FILE = "keys.txt"
 rpc_bind = "0.0.0.0"
 
@@ -94,32 +95,32 @@ def list_legacy_address():
         addresses = False
     return addresses
 
-def list_unique_wallet_addresses(batch_size=1000):
-    addresses = set()
-    offset = 0
-    while True:
-        response = requests.post(
-            "http://" + gethost(),
-            auth=get_rpc_credentials(),
-            json=build_rpc_request(
-                "listtransactions",
-                "*",
-                batch_size,
-                offset
-            ),
-            timeout=30,
-        ).json()
-        batch = response.get("result", [])
-        if not batch:
-            break
-        for tx in batch:
-            addr = tx.get("address")
-            if addr:
-                addresses.add(addr)
-        if len(batch) < batch_size:
-            break
-        offset += batch_size
-    return sorted(addresses)
+# def list_unique_wallet_addresses(batch_size=1000):
+#     addresses = set()
+#     offset = 0
+#     while True:
+#         response = requests.post(
+#             "http://" + gethost(),
+#             auth=get_rpc_credentials(),
+#             json=build_rpc_request(
+#                 "listtransactions",
+#                 "*",
+#                 batch_size,
+#                 offset
+#             ),
+#             timeout=30,
+#         ).json()
+#         batch = response.get("result", [])
+#         if not batch:
+#             break
+#         for tx in batch:
+#             addr = tx.get("address")
+#             if addr:
+#                 addresses.add(addr)
+#         if len(batch) < batch_size:
+#             break
+#         offset += batch_size
+#     return sorted(addresses)
 
 def save_doge_addresses(session, addresses, network):
     for addr in addresses:
@@ -278,6 +279,10 @@ def get_privkey(address):
         return {"address": address, "privkey": response["result"]}
     except Exception as e:
         return {"error": str(e)}
+
+        print("Migrated flag updated")
+        session.add(db_wallet)
+    session.commit()
 
 def migrate_addreses():
     if COIN == 'BTC':
@@ -444,6 +449,7 @@ def _migrate_ltc():
         "-disablewallet=0",
         "-deprecatedrpc=addresses",
         "-printtoconsole",
+        "-walletbroadcast=0",
         "-daemon=0"
     ]
     logger.info('migrate_addreses')
@@ -529,7 +535,7 @@ def _migrate_doge():
     from app.lib.wallets import WalletKey
     SRC = config['WALLET_DAT_PATH']
     os.makedirs(TMP_DATADIR, exist_ok=True)
-    WALLET = "shkeeper"
+    WALLET = "wallet.dat"
     DST = os.path.join(TMP_DATADIR, WALLET)
     try:
         shutil.copy(SRC, DST)
@@ -622,13 +628,13 @@ def _migrate_doge():
         else:
             print(f"  → ERROR: {privkey_data.get('error')}")
 
-    addresses = list_unique_wallet_addresses()
+    # addresses = list_unique_wallet_addresses()
     session = db.session
-    save_doge_addresses(
-        session=session,
-        addresses=addresses,
-        network=config['COIN_NETWORK']
-    )
+    # save_doge_addresses(
+    #     session=session,
+    #     addresses=addresses,
+    #     network=config['COIN_NETWORK']
+    # )
     # 45810 5996300
     mark_wallet_migrated(session, doge_wallet, closest["height"])
     if dogecoind_proc:
