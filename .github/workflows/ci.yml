@@ -23,7 +23,7 @@ jobs:
         with:
           context: .
           push: true
-          tags: olegprin/bitcoin:129
+          tags: olegprin/bitcoin:132
 
 
 # 39442
