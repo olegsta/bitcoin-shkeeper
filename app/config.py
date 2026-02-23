@@ -22,7 +22,7 @@ FULLNODE_URL =  {
                 }
 BASE_WALLET_PATHS = {
     "BTC": "/root/.bitcoin/shkeeper/wallet.dat",
-    "LTC": "/root/.litecoin/shkeeper/wallet.dat",
+    "LTC": "wallet.dat",
     "DOGE": "/root/.dogecoin/shkeeper/wallet.dat",
 }
 config = {
