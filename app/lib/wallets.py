@@ -1218,24 +1218,28 @@ class Wallet(object):
 
         while True:
             with log_time("transactions_update"):
-                n_new = self.transactions_update(key_id=key.id, txs_list=txs_list)
-            current_txids = {t.txid for t in txs_list if hasattr(t, "txid") and t.txid not in seen_txids}
-
+                self.transactions_update(key_id=key.id, txs_list=txs_list, fixed_addresses=fixed_addresses)
+            current_txids = {
+                t.txid for t in txs_list
+                if hasattr(t, "txid") and t.txid not in seen_txids
+            }
             if current_txids:
                 txs_found = True
                 seen_txids.update(current_txids)
                 should_be_finished_count = 0
             else:
                 should_be_finished_count += 1
-
+                if should_be_finished_count > 1:
+                    _logger.info(
+                        "Possible recursive loop detected in scan_key(%d): retry %d/5" %
+                        (key.id, should_be_finished_count)
+                    )
             _logger.info(
-                "Scanned key %d, %s Found %d new transactions, retries %d" %
+                "Scanned key %d, %s Found %d new unique transactions, retries %d" %
                 (key.id, key.address, len(current_txids), should_be_finished_count)
             )
-
             if not current_txids or should_be_finished_count > 5:
                 break
-
         return txs_found
 
     def scan(self, scan_gap_limit=1, account_id=None, change=None, rescan_used=False, network=None, keys_ignore=None, block='', current_block_height=''):
