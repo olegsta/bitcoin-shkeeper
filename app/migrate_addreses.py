@@ -537,7 +537,7 @@ def _migrate_doge():
     from app.lib.wallets import WalletKey
     SRC = config['WALLET_DAT_PATH']
     os.makedirs(TMP_DATADIR, exist_ok=True)
-    WALLET = "shkeeper"
+    WALLET = "wallet.dat"
     DST = os.path.join(TMP_DATADIR, WALLET)
     try:
         shutil.copy(SRC, DST)
@@ -643,7 +643,9 @@ def _migrate_doge():
         addresses=addresses,
         network=config['COIN_NETWORK']
     )
-    mark_wallet_migrated(session, doge_wallet, closest["height"])
+    # 45810 5996300
+    # mark_wallet_migrated(session, doge_wallet, closest["height"])
+    mark_wallet_migrated(session, doge_wallet, 5996300)
     if dogecoind_proc:
         dogecoind_proc.terminate()
         dogecoind_proc.wait()
