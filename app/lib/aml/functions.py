@@ -10,7 +10,7 @@ _logger = logging.getLogger(__name__)
 
 
 def get_min_check_amount(symbol: str) -> Decimal:
-    _logger.debug("get_min_check_amount")
+    _logger.info("aml get_min_check_amount")
     cfg = (
         config.get("EXTERNAL_DRAIN_CONFIG", {}).get("aml_check", {}).get("cryptos", {})
     )
@@ -23,9 +23,11 @@ def get_min_check_amount(symbol: str) -> Decimal:
 def get_external_drain_type(
     symbol: str,
 ) -> Literal["aml", "regular", "symbol_not_found"]:
-    _logger.debug("get_external_drain_type")
+    _logger.info("get_external_drain_type")
     cfg = config.get("EXTERNAL_DRAIN_CONFIG")
+    _logger.info("aml get_external_drain_type")
     if not cfg:
+        _logger.info("aml get_external_drain_type regular")
         return "regular"
 
     aml_cfg = cfg.get("aml_check", {})
@@ -40,9 +42,11 @@ def get_external_drain_type(
         return "symbol_not_found"
 
     if aml_cfg.get("state") == "enabled" and symbol in aml_cfg.get("cryptos", []):
+        _logger.info("aml get_external_drain_type aml")
         return "aml"
 
     if reg_cfg.get("state") == "enabled" and symbol in reg_cfg.get("cryptos", []):
+        _logger.info("aml get_external_drain_type regular")
         return "regular"
 
     return "regular"
