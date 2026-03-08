@@ -193,7 +193,7 @@ class LitecoindClient(BaseClient):
                 if address in addrs:
                     matched = True
                     break
-                if not matched and any(addr in fixed_addresses for addr in addrs):
+                if any(addr in fixed_addresses for addr in addrs):
                     for vin in tx.get('vin', []):
                         prev_txid = vin.get('txid')
                         prev_vout_index = vin.get('vout')
@@ -204,7 +204,8 @@ class LitecoindClient(BaseClient):
                         prev_tx = self.proxy.getrawtransaction(prev_txid, 1)
                         prev_vout = prev_tx['vout'][prev_vout_index]
                         addrs = prev_vout.get('scriptPubKey', {}).get('addresses', [])
-                        _logger.warning(f"Connect to {addrs} prev_addrs")
+                        _logger.warning(f"Connect to vasa {address} address")
+                        _logger.warning(f"Connect to vasa_1 {addrs} prev_addrs")
                         # except Exception:
                         #     continue
 
@@ -221,7 +222,7 @@ class LitecoindClient(BaseClient):
                 txs.append(t)
 
                 if tx_id == after_txid:
-                    txs = []
+                    break
             except Exception as e:
                 _logger.error(f"Failed to parse tx {tx_id}: {e}")
 

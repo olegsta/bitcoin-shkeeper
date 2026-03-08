@@ -1229,7 +1229,7 @@ class Wallet(object):
             seen_txids.update(new_txids)
             txs_found = True
 
-            _logger.info(f"Scanned key {key.id}, {key.address} Found {len(new_txids)} new transactions")
+            _logger.warning(f"Scanned key {key.id}, {key.address} Found {len(new_txids)} new transactions")
 
         return txs_found
 
@@ -1465,7 +1465,7 @@ class Wallet(object):
                 if addr in wallet_addresses_set:
                     tx_related_addresses.add(addr)
                     related_utxo_count += 1
-                    _logger.debug(f"[VIN] TXID: {tx.get('txid')} → {addr}")
+                    _logger.warning(f"[VIN] TXID: {tx.get('txid')} → {addr}")
 
     def _finalize_scan(self, start_time, block, total_txs, related_tx_map, related_utxo_count):
         elapsed_s = round(time.time() - start_time, 2)
@@ -1475,9 +1475,9 @@ class Wallet(object):
         _logger.warning("────────────────────────────────────────────")
         _logger.warning(f"💡 Found {related_txs} related transactions:")
         for txid, addrs in related_tx_map.items():
-            _logger.debug(f"  TXID: {txid}")
+            _logger.warning(f"  TXID: {txid}")
             for addr in addrs:
-                _logger.debug(f"    → {addr}")
+                _logger.warning(f"    → {addr}")
         _logger.warning("────────────────────────────────────────────")
 
         _logger.warning(
