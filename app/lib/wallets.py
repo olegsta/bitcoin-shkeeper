@@ -2489,10 +2489,11 @@ class Wallet(object):
                                               random_output_order, replace_by_fee, fee_per_kb=fee_per_kb)
         _logger.info(f"Transaction {transaction}")
         transaction.sign(priv_keys)
+        fee_exact = transaction.calculate_fee()
+        _logger.info(f"Transaction calculated fee {transaction.fee}")
+        _logger.info(f"Transaction fee_exact {fee_exact}")
         # Calculate exact fees and update change output if necessary
-        if fee is None and transaction.fee_per_kb and transaction.change:
-            fee_exact = transaction.calculate_fee()
-            _logger.info(f"Transaction fee_exact {fee_exact}")
+        if (fee is None and transaction.fee_per_kb and transaction.change) or (fee_exact is not None and transaction.fee is not None and fee_exact > transaction.fee):
             # Recreate transaction if fee estimation more than 10% off
             if fee_exact != self.network.fee_min and fee_exact != self.network.fee_max and \
                     fee_exact and abs((float(transaction.fee) - float(fee_exact)) / float(fee_exact)) > 0.10:
@@ -2501,7 +2502,7 @@ class Wallet(object):
                 transaction = self.transaction_create(output_arr, input_arr, input_key_id, account_id, network,
                                                       fee_exact, min_confirms, max_utxos, locktime,
                                                       number_of_change_outputs, random_output_order,
-                                                      replace_by_fee)
+                                                      replace_by_fee, fee_per_kb=fee_per_kb)
                 transaction.sign(priv_keys)
 
         transaction.rawtx = transaction.raw()
