@@ -9,6 +9,7 @@ from .config import config
 from .utils import skip_if_running
 from .wallet import CoinWallet
 from .logging import logger
+from .payout_lock import payout_lock
 from app.config import COIN
 from app.migrate_addreses import migrate_addreses
 
@@ -23,7 +24,8 @@ def make_multipayout(symbol, payout_list, fee):
     if symbol == COIN:
         w = CoinWallet()
         logger.warning(f"Starting payout {payout_list}")
-        payout_results = w.make_multipayout(payout_list, fee)
+        with payout_lock():
+            payout_results = w.make_multipayout(payout_list, fee)
         post_payout_results.delay(payout_results, symbol)
         return payout_results  
     else:
@@ -34,7 +36,8 @@ def withdraw_to_external_wallet_task(symbol, payout_list):
     if symbol == COIN:
         w = CoinWallet()
         logger.warning(f"Starting withdraw_to_external_wallet_task {payout_list}")
-        payout_results = w.withdraw_to_external_wallet_task(payout_list)
+        with payout_lock():
+            payout_results = w.withdraw_to_external_wallet_task(payout_list)
         post_payout_results.delay(payout_results, symbol)
         return payout_results  
     else:

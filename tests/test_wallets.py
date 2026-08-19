@@ -132,3 +132,50 @@ class TestSendUsesPersistSentTransaction(unittest.TestCase):
         self.assertEqual(wt.txid, "abc123")
         self.assertTrue(wt.pushed)
         mock_persist.assert_called_once()
+
+
+class TestPayoutLock(unittest.TestCase):
+    @patch("app.payout_lock.redis.Redis")
+    def test_payout_lock_acquires_and_releases(self, mock_redis_cls):
+        from app.payout_lock import payout_lock
+
+        mock_client = MagicMock()
+        mock_lock = MagicMock()
+        mock_lock.acquire.return_value = True
+        mock_client.lock.return_value = mock_lock
+        mock_redis_cls.from_url.return_value = mock_client
+
+        with payout_lock(timeout=10, blocking_timeout=10):
+            pass
+
+        _, lock_kwargs = mock_client.lock.call_args
+        self.assertEqual(lock_kwargs["timeout"], 10)
+        self.assertFalse(lock_kwargs["thread_local"])
+        mock_lock.acquire.assert_called_once_with(blocking=True)
+        mock_lock.release.assert_called_once()
+
+    def test_lock_heartbeat_extends_ttl_until_stopped(self):
+        from app.payout_lock import _lock_heartbeat
+
+        lock = MagicMock()
+        lock.reacquire.return_value = True
+        stop_event = MagicMock()
+        stop_event.wait.side_effect = [False, True]
+
+        _lock_heartbeat(lock, timeout=30, stop_event=stop_event)
+
+        lock.reacquire.assert_called_once()
+        stop_event.wait.assert_any_call(10)
+
+    def test_lock_heartbeat_stops_if_reacquire_fails(self):
+        from app.payout_lock import _lock_heartbeat
+
+        lock = MagicMock()
+        lock.reacquire.return_value = False
+        stop_event = MagicMock()
+        stop_event.wait.return_value = False
+
+        _lock_heartbeat(lock, timeout=30, stop_event=stop_event)
+
+        lock.reacquire.assert_called_once()
+        self.assertEqual(stop_event.wait.call_count, 1)
