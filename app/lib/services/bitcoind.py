@@ -252,14 +252,18 @@ class BitcoindClient(BaseClient):
         }
 
     def estimatefee(self, blocks):
-        pres = ''
+        # estimatesmartfee often has no feerate on testnet/regtest.
+        # Do not fall back to estimatefee: Bitcoin Core removed that RPC.
         try:
-            pres = self.proxy.estimatesmartfee(blocks)
-            res = pres['feerate']
-        except KeyError as e:
-            _logger.info("bitcoind error: %s, %s" % (e, pres))
-            res = self.proxy.estimatefee(blocks)
-        return int(res * self.units)
+            pres = self.proxy.estimatesmartfee(blocks) or {}
+        except Exception as e:
+            _logger.info("bitcoind estimatesmartfee error: %s", e)
+            return None
+        feerate = pres.get('feerate')
+        if feerate is None:
+            _logger.info("bitcoind estimatesmartfee has no feerate: %s", pres)
+            return None
+        return int(feerate * self.units)
 
     def blockcount(self):
         bcinfo = self.proxy.getblockchaininfo()

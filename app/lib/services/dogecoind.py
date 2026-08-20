@@ -294,14 +294,16 @@ class DogecoindClient(BaseClient):
             'response_dict': res
         }
     def estimatefee(self, blocks):
-        pres = ''
         try:
-            pres = self.proxy.estimatesmartfee(blocks)
-            res = pres['feerate']
-        except KeyError as e:
-            _logger.info("dogecoind error: %s, %s" % (e, pres))
-            res = self.proxy.estimatefee(blocks)
-        return int(res * self.units)
+            pres = self.proxy.estimatesmartfee(blocks) or {}
+        except Exception as e:
+            _logger.info("dogecoind estimatesmartfee error: %s", e)
+            return None
+        feerate = pres.get('feerate')
+        if feerate is None:
+            _logger.info("dogecoind estimatesmartfee has no feerate: %s", pres)
+            return None
+        return int(feerate * self.units)
 
     def blockcount(self):
         bcinfo = self.proxy.getblockchaininfo()
