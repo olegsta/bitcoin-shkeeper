@@ -128,6 +128,9 @@ class Service(object):
     def _provider_execute(self, method, *arguments, retries: int = 3, retry_delay: int = 2):
         if method == "gettransactions":
             print(f"--> Executing method '{method}'")
+        elif method == "parse_block_txs":
+            txids = arguments[1] if len(arguments) > 1 else []
+            print(f"--> Executing method '{method}' txids={len(txids)}")
         else:
             print(f"--> Executing method '{method}' with arguments: {arguments}")
 
@@ -168,7 +171,7 @@ class Service(object):
                         print(f"--> Empty response from {sp} when calling {method}")
                         continue
                     self.results[sp] = res
-                    if method in ("getblock", "getblocktransactions"):
+                    if method in ("getblock", "getblocktransactions", "parse_block_txs"):
                         print(f"--> Success from provider {sp}")
                     else:
                         print(f"--> Success from provider {sp}: {res}")
@@ -285,6 +288,12 @@ class Service(object):
             limit = limit - len(txs_cache)
             qry_after_txid = bytes.fromhex(txs_cache[-1:][0].txid)
 
+        # Block scan already fetched the block: skip cache/blockcount RPC per address.
+        if txs_list:
+            txs = self._provider_execute('gettransactions', address, qry_after_txid.hex(), txs_list, fixed_addresses) or []
+            self.complete = True
+            return txs_cache + txs
+
         # Get (extra) transactions from service providers
         txs = []
         if not (db_addr and db_addr.last_block and db_addr.last_block >= self.blockcount()):
@@ -346,6 +355,9 @@ class Service(object):
 
     def getblocktransactions(self, block):
         return self._provider_execute('getblocktransactions', block)
+
+    def parse_block_txs(self, txs_list, txids):
+        return self._provider_execute('parse_block_txs', txs_list, txids)
     
     def getblockhash(self, height):
         return self._provider_execute('getblockhash', height)

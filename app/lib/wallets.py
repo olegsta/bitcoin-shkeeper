@@ -1304,15 +1304,18 @@ class Wallet(object):
         fixed_addresses = self._get_fixed_addresses_if_needed(network, current_block_height, block)
 
         wallet_addresses_set = self._get_wallet_addresses(network)
-        addresses_in_txs, related_tx_map, related_utxo_count = self._process_transactions(txs, wallet_addresses_set, fixed_addresses)
+        addresses_in_txs, related_tx_map, related_vout_count = self._process_transactions(txs, wallet_addresses_set, fixed_addresses)
 
         _logger.warning(f"Address scan complete: {len(addresses_in_txs)} unique addresses, {len(related_tx_map)} related transactions")
 
         self._update_db_transactions(network)
 
-        self._scan_keys_loop(txs_list, addresses_in_txs, fixed_addresses, account_id, network)
+        if COIN == "BTC":
+            self._store_related_block_txs(txs_list, related_tx_map)
+        else:
+            self._scan_keys_loop(txs_list, addresses_in_txs, fixed_addresses, account_id, network)
 
-        self._finalize_scan(start_time, block, total_txs=len(txs), related_tx_map=related_tx_map, related_utxo_count=related_utxo_count)
+        self._finalize_scan(start_time, block, total_txs=len(txs), related_tx_map=related_tx_map, related_vout_count=related_vout_count)
 
     def _get_fixed_addresses_if_needed(self, network, current_block_height, block):
         if COIN not in ("DOGE", "LTC"):
@@ -1337,21 +1340,21 @@ class Wallet(object):
     def _process_transactions(self, txs, wallet_addresses_set, fixed_addresses):
         addresses_in_txs = set()
         related_tx_map = {}
-        related_utxo_count = 0
+        related_vout_count = 0
 
         for tx in txs:
             txid = tx.get('txid')
             tx_related_addresses = set()
 
-            related_utxo_count = self._process_vouts(tx, wallet_addresses_set, addresses_in_txs, tx_related_addresses, related_utxo_count)
-            self._process_vins(tx, wallet_addresses_set, addresses_in_txs, tx_related_addresses, related_utxo_count, fixed_addresses)
+            related_vout_count = self._process_vouts(tx, wallet_addresses_set, addresses_in_txs, tx_related_addresses, related_vout_count)
+            self._process_vins(tx, wallet_addresses_set, addresses_in_txs, tx_related_addresses, fixed_addresses)
 
             if tx_related_addresses:
                 related_tx_map[txid] = tx_related_addresses
 
-        return addresses_in_txs, related_tx_map, related_utxo_count
+        return addresses_in_txs, related_tx_map, related_vout_count
 
-    def _process_vouts(self, tx, wallet_addresses_set, addresses_in_txs, tx_related_addresses, related_utxo_count):
+    def _process_vouts(self, tx, wallet_addresses_set, addresses_in_txs, tx_related_addresses, related_vout_count):
         for vout in tx.get('vout', []):
             spk = vout.get('scriptPubKey', {})
             addrs = spk.get('addresses') or ([spk.get('address')] if spk.get('address') else [])
@@ -1361,28 +1364,27 @@ class Wallet(object):
                 addresses_in_txs.add(addr)
                 if addr in wallet_addresses_set:
                     tx_related_addresses.add(addr)
-                    related_utxo_count += 1
+                    related_vout_count += 1
                     _logger.warning(f"[VOUT] TXID: {tx.get('txid')} → {addr}")
-        return related_utxo_count
+        return related_vout_count
 
-    def _process_vins(self, tx, wallet_addresses_set, addresses_in_txs, tx_related_addresses, related_utxo_count, fixed_addresses):
+    def _process_vins(self, tx, wallet_addresses_set, addresses_in_txs, tx_related_addresses, fixed_addresses):
         if COIN in ("DOGE", "LTC") and fixed_addresses:
             for vout in tx.get('vout', []):
                 addrs = vout.get('scriptPubKey', {}).get('addresses') or []
                 if not set(addrs).intersection(fixed_addresses):
                     continue
                 _logger.warning(f"Scanning prev_addrs intersection found for TX {tx.get('txid')}")
-                self._scan_prev_vins(tx, wallet_addresses_set, addresses_in_txs, tx_related_addresses, related_utxo_count)
+                self._scan_prev_vins(tx, wallet_addresses_set, addresses_in_txs, tx_related_addresses)
         else:
             for vin in tx.get('vin', []):
                 prevout = vin.get('prevout', {})
                 spk = prevout.get('scriptPubKey', {})
                 addrs = spk.get('addresses') or ([spk.get('address')] if spk.get('address') else [])
                 for addr in addrs:
-                    addresses_in_txs.add(addr)
                     if addr in wallet_addresses_set:
+                        addresses_in_txs.add(addr)
                         tx_related_addresses.add(addr)
-                        related_utxo_count += 1
                         _logger.warning(f"[VIN] TXID: {tx.get('txid')} → {addr}")
 
     def _update_db_transactions(self, network):
@@ -1395,6 +1397,55 @@ class Wallet(object):
             if db_txs:
                 all_txids = [db_tx.txid for db_tx in db_txs]
                 self.transactions_update_by_txids(all_txids)
+
+    def _store_related_block_txs(self, txs_list, related_tx_map):
+        if not related_tx_map:
+            return
+        related_txids = list(related_tx_map.keys())
+        _logger.warning(
+            "Storing %s unique related txs for %s addresses (skip per-address RPC)",
+            len(related_txids),
+            len({addr for addrs in related_tx_map.values() for addr in addrs}),
+        )
+        srv = self._build_service()
+        parsed = srv.parse_block_txs(txs_list, related_txids) or []
+        unique_txs = list({t.txid: t for t in parsed}.values())
+        if not unique_txs:
+            _logger.warning("No related txs parsed from block")
+            return
+
+        utxo_set = set()
+        txids_to_notify = set()
+        with log_time("store related block txs"):
+            for t in unique_txs:
+                wt = WalletTransaction.from_transaction(self, t)
+                txid, is_new = wt.store(commit=False)
+                utxos = [(ti.prev_txid.hex(), ti.output_n_int) for ti in wt.inputs]
+                utxo_set.update(utxos)
+                if is_new:
+                    txids_to_notify.add(txid)
+
+        with log_time("update transaction_outputs"):
+            if utxo_set:
+                utxo_list = [(bytes.fromhex(txid), n) for txid, n in utxo_set]
+                self._mark_utxos_spent(utxo_list)
+
+        stored_txids = {t.txid for t in unique_txs}
+        addr_to_txid = {}
+        for txid, addrs in related_tx_map.items():
+            if txid not in stored_txids:
+                continue
+            for addr in addrs:
+                addr_to_txid[addr] = txid
+        for address, txid in addr_to_txid.items():
+            self.session.query(DbKey).filter(
+                DbKey.address == address,
+                DbKey.wallet_id == self.wallet_id,
+            ).update({DbKey.latest_txid: bytes.fromhex(txid)}, synchronize_session=False)
+
+        self._commit()
+        for txid in txids_to_notify:
+            notify_shkeeper(COIN, txid)
 
     def _scan_keys_loop(self, txs_list, addresses_in_txs, fixed_addresses, account_id, network):
         MAX_RETRIES = 3
@@ -1497,7 +1548,7 @@ class Wallet(object):
 
         return something_new, n_highest_updated
 
-    def _scan_prev_vins(self, tx, wallet_addresses_set, addresses_in_txs, tx_related_addresses, related_utxo_count):
+    def _scan_prev_vins(self, tx, wallet_addresses_set, addresses_in_txs, tx_related_addresses):
         for vin in tx.get('vin', []):
             prev_txid = vin.get('txid')
             prev_vout_index = vin.get('vout')
@@ -1516,10 +1567,9 @@ class Wallet(object):
                 addresses_in_txs.add(addr)
                 if addr in wallet_addresses_set:
                     tx_related_addresses.add(addr)
-                    related_utxo_count += 1
                     _logger.debug(f"[VIN] TXID: {tx.get('txid')} → {addr}")
 
-    def _finalize_scan(self, start_time, block, total_txs, related_tx_map, related_utxo_count):
+    def _finalize_scan(self, start_time, block, total_txs, related_tx_map, related_vout_count):
         elapsed_s = round(time.time() - start_time, 2)
         related_txs = len(related_tx_map)
         correlation = (related_txs / total_txs * 100) if total_txs > 0 else 0
@@ -1535,7 +1585,7 @@ class Wallet(object):
         _logger.warning(
             f"✅ SCAN COMPLETED: {elapsed_s}s, block {block}, "
             f"total_txs={total_txs}, related_txs={related_txs}, "
-            f"related_utxo={related_utxo_count}, "
+            f"related_vout={related_vout_count}, "
             f"correlation={correlation:.2f}%"
         )
 
