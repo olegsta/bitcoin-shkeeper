@@ -433,7 +433,7 @@ def _migrate_btc():
             wallet_name = wallet["name"]
             print(wallet_name)
             wallet_delete(wallet_name, force=True)
-        coin_wallet = Wallet.create("Wallet7", wif, witness_type="segwit", purpose="84")
+        coin_wallet = Wallet.create("Wallet7", wif, witness_type="segwit", purpose="84", store_id=1)
         legacy_address = list_legacy_address()
         quantity_generated_adresses = get_legacy_quantity_generated_adresses(
             legacy_address
@@ -478,7 +478,7 @@ def _migrate_btc():
             wallet_name = wallet["name"]
             print(wallet_name)
             wallet_delete(wallet_name, force=True)
-        coin_wallet = Wallet.create("Wallet7", wif, witness_type="segwit", purpose="0")
+        coin_wallet = Wallet.create("Wallet7", wif, witness_type="segwit", purpose="0", store_id=1)
         print(list_legacy_address())
         legacy_address = list_legacy_address()
         legacy_quantity_generated_adresses = get_legacy_quantity_generated_adresses(
@@ -602,7 +602,7 @@ def _migrate_ltc():
         wallet_name = wallet["name"]
         print(wallet_name)
         wallet_delete(wallet_name, force=True)
-    coin_wallet = Wallet.create("Wallet7", wif, witness_type="segwit", purpose="0")
+    coin_wallet = Wallet.create("Wallet7", wif, witness_type="segwit", purpose="0", store_id=1)
     print(list_legacy_address())
 
     legacy_address = list_legacy_address()
@@ -733,6 +733,7 @@ def _migrate_doge():
         witness_type="legacy",
         scheme="single",
         encoding="base58",
+        store_id=1,
     )
     legacy_address = list_all_wallet_addresses()
     print(legacy_address)

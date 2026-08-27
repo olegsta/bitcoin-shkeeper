@@ -13,7 +13,7 @@ import os
 _node_synced = False
 
 def handle_event(transaction):        
-    logger.info(f'new transaction: {transaction!r}')
+    logger.debug("new transaction: %r", transaction)
 
 def log_loop():
     wallet_service = WalletService()
@@ -33,17 +33,23 @@ def log_loop():
     ).scalar()
     logger.info(f"DbCacheVars value {value}")
     if not value:
-        logger.info(f"No last_scanned_block found, initializing with {latest_height}")
+        safe_latest_height = max(0, latest_height - config['SAFE_CONFIRMATIONS'])
+        current_height = max(0, safe_latest_height - 1)
+        logger.info(
+            "No last_scanned_block found, initializing at %s (tip=%s safe=%s)",
+            current_height,
+            latest_height,
+            safe_latest_height,
+        )
         new_var = DbCacheVars(
             varname='last_scanned_block',
             network_name=wallet.network.name,
-            value=str(latest_height),
+            value=str(current_height),
             type='int',
             expires=None
         )
         wallet.session.add(new_var)
         wallet.session.commit()
-        current_height = latest_height
     else:
         current_height = int(value)
     while True:
@@ -60,7 +66,7 @@ def log_loop():
                 logger.info(f"Processed block at latest_height {latest_height}")
                 logger.info(f"Processed block at current_height {height}")
                 logger.info(f"block_hash: {block_hash}")
-                wallet.scan(block=block_hash, current_block_height=height)
+                wallet_service.scan_block(block_hash, height)
 
                 wallet.session.query(DbCacheVars).filter_by(
                     varname='last_scanned_block',

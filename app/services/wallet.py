@@ -1,6 +1,4 @@
-import random
 import time
-import uuid
 
 import sqlalchemy
 
@@ -12,18 +10,9 @@ from app.utils import BTCUtils, DOGEUtils, LTCUtils
 from ..config import COIN, config
 from ..logging import logger
 from ..models import DbWallet, db
+from . import store as store_service
 
 _WALLET_GENERATE_RETRIES = 3
-_DB_QUERY_RETRIES = 3
-
-_WALLET_NAME_ADJECTIVES = [
-    "brave", "lucky", "silent", "quick", "happy",
-    "clever", "bold", "wise", "calm", "fierce",
-]
-_WALLET_NAME_ANIMALS = [
-    "fox", "tiger", "eagle", "wolf", "panther",
-    "lion", "hawk", "bear", "cobra", "rhino",
-]
 
 _ADDRESS_VALIDATORS = {
     "BTC": BTCUtils.is_valid_btc_address,
@@ -33,77 +22,131 @@ _ADDRESS_VALIDATORS = {
 
 
 class WalletService:
-    def current_wallet(self):
-        return Wallet(self.wallet_name())
+    def current_wallet(self, store_id=None):
+        name = self.wallet_name(store_id=store_id)
+        if not name:
+            return None
+        return Wallet(name)
 
-    def wallet(self):
+    def wallet(self, store_id=None):
         if not get_account_password():
             return
-        return Wallet(self.wallet_name())
+        name = self.wallet_name(store_id=store_id)
+        if not name:
+            return
+        return Wallet(name)
 
-    def db_wallet(self):
-        return db.session.query(DbWallet).first()
+    def db_wallet(self, store_id=None):
+        return store_service.store_wallet(store_id)
 
-    def wallet_name(self):
+    def all_hd_wallets(self):
+        if not get_account_password():
+            return []
+        rows = (
+            db.session.query(DbWallet)
+            .filter(DbWallet.parent_id.is_(None))
+            .order_by(DbWallet.id.asc())
+            .all()
+        )
+        wallets = []
+        for row in rows:
+            try:
+                wallets.append(Wallet(row.name))
+            except Exception:
+                logger.exception("Failed to load wallet %s", row.name)
+        return wallets
+
+    def scan_block(self, block_hash, current_block_height):
+        wallets = self.all_hd_wallets()
+        if not wallets:
+            raise RuntimeError(f"No HD wallets to scan for block {block_hash}")
+        Wallet.scan_block(wallets, block=block_hash, current_block_height=current_block_height)
+
+    def wallet_name(self, store_id=None):
         if not get_account_password():
             return
-        dbw = self.db_wallet()
-        if dbw is None:
-            dbw = self._ensure_db_wallet()
-        return dbw.name
+        store_id = store_service.parse_store_id(store_id)
+        dbw = self.db_wallet(store_id)
+        if dbw is None and store_id == store_service.DEFAULT_STORE_ID:
+            dbw = self._ensure_db_wallet(store_id)
+        return dbw.name if dbw else None
 
     def witness_type(self):
         return 'legacy' if COIN == "DOGE" else 'segwit'
 
-    def generate_wallet_name(self):
-        adj = random.choice(_WALLET_NAME_ADJECTIVES)
-        animal = random.choice(_WALLET_NAME_ANIMALS)
-        unique = uuid.uuid4().hex[:6]
-        return f"{adj}-{animal}-{unique}"
+    def generate_wallet_name(self, store_id=None):
+        return f"store-{store_service.parse_store_id(store_id)}"
 
-    def get_fee_deposit_account(self):
-        wallet = self.current_wallet()
+    def get_store_balance(self, store_id=None):
+        store_id = store_service.parse_store_id(store_id)
+        wallet = self.wallet(store_id=store_id)
         if not wallet:
-            wallet = self._create_wallet()
+            return Value.from_satoshi(0).value
+        return Value.from_satoshi(wallet.balance()).value
 
-        current_index_path = wallet.current_index_path()
-        keys = wallet.keys_for_path(path=f"m/84'/{current_index_path}'/0'/0/0")
-        return keys[0].address
-
-    def get_deposit_account_balance(self):
-        amount = self.wallet().balance()
-        return Value.from_satoshi(amount).value
-
-    def get_dump(self):
+    def get_dump(self, store_id=None, scoped=False):
         logger.warning('Start dumping wallets')
-        return {
-            key.address: {
-                'public_address': key.address,
-                'private': key.private.hex(),
-                'wif': key.wif.decode('utf-8'),
-                'public': key.public.hex(),
-            }
-            for key in self.current_wallet().keys()
-        }
+        store_id = store_service.parse_store_id(store_id)
+        dump = {}
+        rows = (
+            db.session.query(DbWallet)
+            .filter(DbWallet.parent_id.is_(None))
+            .order_by(DbWallet.id.asc())
+            .all()
+        )
+        for row in rows:
+            if scoped and row.store_id != store_id:
+                continue
+            try:
+                wallet = Wallet(row.name)
+            except Exception:
+                logger.exception("Failed to load wallet %s", row.name)
+                continue
+            for key in wallet.keys():
+                if not key.address:
+                    continue
+                wif = key.wif
+                if isinstance(wif, bytes):
+                    wif = wif.decode('utf-8')
+                dump[key.address] = {
+                    'public_address': key.address,
+                    'private': key.private.hex() if key.private else None,
+                    'wif': wif,
+                    'public': key.public.hex() if key.public else None,
+                }
+        return dump
 
-    def get_all_addresses(self):
-        wallet_list = self._query_all_wallets()
-        return [wallet.pub_address for wallet in wallet_list]
-
-    def get_all_accounts(self):
-        wallet = self.current_wallet()
+    def get_all_accounts(self, store_id=None):
+        wallet = self.current_wallet(store_id=store_id)
+        if not wallet:
+            return []
         current_index_path = wallet.current_index_path()
         segwit_prefix = f"m/84'/{current_index_path}'/0'/0/"
-        return [
-            key.address for key in wallet.keys()
-            if key.path.startswith(segwit_prefix) or key.path.startswith("m/0'/0'/")
-        ]
+        accounts = []
+        for key in wallet.keys():
+            if not key.address:
+                continue
+            path = key.path or ""
+            if not (
+                path.startswith(segwit_prefix) or path.startswith("m/0'/0'/")
+            ):
+                continue
+            accounts.append(key.address)
+        return accounts
 
-    def generate_address(self):
+    def first_store_address(self, store_id=None):
+        store_id = store_service.parse_store_id(store_id)
+        keys = store_service.store_address_keys(store_id)
+        receive = next((key for key in keys if key.change == 0), None)
+        key = receive or (keys[0] if keys else None)
+        return key.address if key else ""
+
+    def generate_address(self, store_id=None):
         logger.warning("generate_address started for coin=%s network=%s", COIN, config['COIN_NETWORK'])
-        wallet, address_index = self._prepare_wallet_for_new_address()
+        store_id = store_service.parse_store_id(store_id)
+        wallet, address_index = self._prepare_wallet_for_new_address(store_id)
         if COIN == "DOGE":
-            return self._generate_doge_address()
+            return self._generate_doge_address(store_id)
         return self._generate_hd_address(wallet, address_index)
 
     def is_valid_address(self, address: str) -> bool:
@@ -112,65 +155,79 @@ class WalletService:
             raise ValueError(f"Unknown coin type: {COIN}")
         return validator(address)
 
-    def _create_wallet(self, wallet_name=None):
-        return Wallet.create(
-            wallet_name or self.generate_wallet_name(),
-            network=config['COIN_NETWORK'],
-            witness_type=self.witness_type(),
-            scheme="single" if COIN == "DOGE" else "bip32",
-            encoding="base58" if COIN == "DOGE" else "bech32",
-        )
+    def _create_wallet(self, store_id=None, wallet_name=None):
+        store_id = store_service.parse_store_id(store_id)
+        try:
+            wallet = Wallet.create(
+                wallet_name or self.generate_wallet_name(store_id),
+                network=config['COIN_NETWORK'],
+                witness_type=self.witness_type(),
+                scheme="single" if COIN == "DOGE" else "bip32",
+                encoding="base58" if COIN == "DOGE" else "bech32",
+                store_id=store_id,
+                generated_address_count=1,
+            )
+            return wallet, True
+        except sqlalchemy.exc.IntegrityError:
+            db.session.rollback()
+            logger.warning("Wallet already exists for store_id=%s", store_id)
+            existing = self.db_wallet(store_id)
+            if existing is None:
+                raise
+            return Wallet(existing.name), False
 
-    def _ensure_db_wallet(self):
+    def _ensure_db_wallet(self, store_id=None):
+        store_id = store_service.parse_store_id(store_id)
         for attempt in range(1, _WALLET_GENERATE_RETRIES + 1):
             try:
-                self.generate_address()
+                self.generate_address(store_id=store_id)
                 db.session.commit()
-                return self.db_wallet()
+                return self.db_wallet(store_id)
             except sqlalchemy.exc.SQLAlchemyError as e:
                 db.session.rollback()
                 wait_time = 2 * attempt
-                print(f"SQLAlchemy error detected: {e}. Retrying in {wait_time}s (attempt {attempt})")
+                logger.warning(
+                    "SQLAlchemy error detected: %s. Retrying in %ss (attempt %s)",
+                    e,
+                    wait_time,
+                    attempt,
+                )
                 time.sleep(wait_time)
         raise RuntimeError(
             f"Could not generate wallet after {_WALLET_GENERATE_RETRIES} attempts due to repeated errors"
         )
 
-    def _query_all_wallets(self):
-        for i in range(_DB_QUERY_RETRIES):
-            try:
-                return Wallet.query.all()
-            except:
-                db.session.rollback()
-                if i >= _DB_QUERY_RETRIES - 1:
-                    raise Exception("There was exception during query to the database, try again later")
+    def _prepare_wallet_for_new_address(self, store_id):
+        db_wallet = self.db_wallet(store_id)
+        if db_wallet is None:
+            wallet, created = self._create_wallet(store_id)
+            if created:
+                logger.warning("Wallet created for %s store_id=%s", COIN, store_id)
+                return wallet, 1
+            db_wallet = self.db_wallet(store_id)
+            if db_wallet is None:
+                raise RuntimeError(f"Failed to create wallet for store_id={store_id}")
 
-    def _prepare_wallet_for_new_address(self):
-        if db.session.query(DbWallet).count() == 0:
-            wallet = self._create_wallet()
-            logger.warning("Wallet created for %s", COIN)
-            return wallet, 1
-
-        wallet = self.current_wallet()
-        db_wallet = self.db_wallet()
+        wallet = Wallet(db_wallet.name)
         address_index = db_wallet.generated_address_count + 1
         db_wallet.generated_address_count = address_index
         db.session.commit()
         logger.warning(
-            "generate_address %s: wallet=%s purpose=%s migrated=%s index=%s",
+            "generate_address %s: wallet=%s store_id=%s purpose=%s migrated=%s index=%s",
             COIN,
             db_wallet.name,
+            db_wallet.store_id,
             wallet.purpose,
             db_wallet.migrated,
             address_index,
         )
         return wallet, address_index
 
-    def _generate_doge_address(self):
+    def _generate_doge_address(self, store_id):
         from app.lib.keys import HDKey
 
         new_key = HDKey(network=config['COIN_NETWORK'], witness_type='legacy')
-        db_wallet = self.db_wallet()
+        db_wallet = self.db_wallet(store_id)
         wallet_key = WalletKey.from_key(
             name=f"{db_wallet.name}_{db_wallet.generated_address_count}",
             wallet_id=db_wallet.id,

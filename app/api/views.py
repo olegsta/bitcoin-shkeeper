@@ -1,17 +1,31 @@
-from flask import g, jsonify
+from flask import g, jsonify, request
 
 from app.logging import logger
 from app.services import NodeService, TransactionLookupService, WalletService
+from app.services import store as store_service
 from app.utils import block_during_migration
 
 from . import api
+
+
+def _json():
+    return request.get_json(silent=True) or {}
+
+
+def _request_store_id(*, required=False):
+    return store_service.parse_store_id(_json().get("store_id"), required=required)
 
 
 @api.post("/generate-address")
 @block_during_migration
 def generate_new_address():
     logger.warning("generate-address request started for symbol=%s", g.symbol)
-    new_address = WalletService().generate_address()
+    try:
+        store_id = _request_store_id()
+    except ValueError as exc:
+        return {"status": "error", "msg": str(exc)}, 400
+
+    new_address = WalletService().generate_address(store_id=store_id)
     logger.warning("generate-address request result symbol=%s address=%s", g.symbol, new_address)
     if not new_address:
         logger.error("Failed to generate address for symbol=%s", g.symbol)
@@ -24,7 +38,12 @@ def generate_new_address():
 
 @api.post('/balance')
 def get_balance():
-    balance = WalletService().get_deposit_account_balance()
+    try:
+        store_id = _request_store_id()
+        balance = WalletService().get_store_balance(store_id=store_id)
+    except ValueError as exc:
+        logger.warning("Balance request failed for %s: %s", g.symbol, exc)
+        return {"status": "error", "msg": str(exc)}, 400
     return {'status': 'success', 'balance': balance}
 
 
@@ -57,20 +76,38 @@ def get_transaction(txid):
         logger.warning(f"txid {txid} is not related to any known address for {g.symbol}")
         return []
 
-    logger.warning(related_transactions)
+    logger.debug(related_transactions)
     return related_transactions
 
 
 @api.post('/dump')
 def dump():
-    return WalletService().get_dump()
+    try:
+        store_id = _request_store_id()
+    except ValueError as exc:
+        return {"status": "error", "msg": str(exc)}, 400
+    return WalletService().get_dump(store_id=store_id, scoped=True)
 
 
 @api.post('/fee-deposit-account')
 def get_fee_deposit_account():
-    return {'account': "", 'balance': 0}
+    # Kept for shkeeper UI compatibility. UTXO has no FDA — return store balance
+    # and the first address belonging to the store (may be empty).
+    try:
+        store_id = _request_store_id()
+        wallet = WalletService()
+        return {
+            'account': wallet.first_store_address(store_id=store_id),
+            'balance': wallet.get_store_balance(store_id=store_id),
+        }
+    except ValueError as exc:
+        return {"status": "error", "msg": str(exc)}, 400
 
 
 @api.post('/get_all_addresses')
 def get_all_addresses():
-    return WalletService().get_all_accounts()
+    try:
+        store_id = _request_store_id()
+    except ValueError as exc:
+        return {"status": "error", "msg": str(exc)}, 400
+    return WalletService().get_all_accounts(store_id=store_id)

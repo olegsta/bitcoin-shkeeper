@@ -17,7 +17,7 @@ def check_credentials():
         and auth.username == config['API_USERNAME']
         and auth.password == config['API_PASSWORD']
     ):
-        return {'status': 'error', 'msg': 'authorization requred'}, 401
+        return {'status': 'error', 'msg': 'authorization required'}, 401
 
 
 @api.url_defaults
