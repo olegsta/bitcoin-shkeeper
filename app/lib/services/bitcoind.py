@@ -1,4 +1,5 @@
 import configparser
+import time
 from app.lib.main import *
 from app.lib.services.authproxy import AuthServiceProxy
 from app.lib.services.baseclient import BaseClient, ClientError
@@ -245,11 +246,21 @@ class BitcoindClient(BaseClient):
         return res
 
     def sendrawtransaction(self, rawtx):
-        res = self.proxy.sendrawtransaction(rawtx)
-        return {
-            'txid': res,
-            'response_dict': res
-        }
+        started = time.perf_counter()
+        tx_size = len(rawtx) // 2 if isinstance(rawtx, str) else len(rawtx)
+        _logger.info("Sending raw transaction to bitcoin node, size=%s bytes", tx_size)
+        try:
+            res = self.proxy.sendrawtransaction(rawtx)
+            elapsed = time.perf_counter() - started
+            _logger.info("Bitcoin node sendrawtransaction finished in %.3fs txid=%s", elapsed, res)
+            return {
+                'txid': res,
+                'response_dict': res
+            }
+        except Exception:
+            elapsed = time.perf_counter() - started
+            _logger.exception("Bitcoin node sendrawtransaction failed after %.3fs", elapsed)
+            raise
 
     def estimatefee(self, blocks):
         # estimatesmartfee often has no feerate on testnet/regtest.

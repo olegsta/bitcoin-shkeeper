@@ -48,6 +48,9 @@ config = {
     'SHKEEPER_KEY': os.environ.get('SHKEEPER_BACKEND_KEY', 'shkeeper'),
     'SHKEEPER_HOST': os.environ.get('SHKEEPER_HOST', 'shkeeper:5000'),
     'REDIS_HOST': os.environ.get('REDIS_HOST', 'localhost'),
+    # Serialize payouts across Celery workers; must cover long multi-input sign+broadcast.
+    'PAYOUT_LOCK_TIMEOUT': os.environ.get('PAYOUT_LOCK_TIMEOUT', '1200'),
+    'PAYOUT_LOCK_BLOCKING_TIMEOUT': os.environ.get('PAYOUT_LOCK_BLOCKING_TIMEOUT', '1200'),
     'CELERY_MAX_TASKS_PER_CHILD': os.environ.get('CELERY_MAX_TASKS_PER_CHILD', '10'), 
     'MIN_TRANSFER_THRESHOLD': Decimal(os.environ.get('MIN_TRANSFER_THRESHOLD', '0.1')),
     'LAST_BLOCK_LOCKED': os.environ.get('LAST_BLOCK_LOCKED', "False"),
