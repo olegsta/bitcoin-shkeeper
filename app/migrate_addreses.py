@@ -3,7 +3,7 @@ import socket
 import shutil
 from app.logging import logger
 from app.config import config, COIN
-from app.wallet import CoinWallet
+from app.services import NodeService
 from app.models import DbWallet, db, DbCacheVars, DbTemporaryMigrationWallet
 from app.lib.services.services import Service
 from os import environ
@@ -192,7 +192,7 @@ def get_legacy_quantity_generated_adresses(list_addreses):
 
 def find_closest_block_by_timestamp(target_timestamp, max_diff_seconds=86400):
     srv = Service(config["COIN_NETWORK"])
-    wallet = CoinWallet()
+    wallet = NodeService()
     start_height = 0
     end_height = wallet.get_last_block_number()
     closest_block = None
@@ -283,7 +283,7 @@ def mark_wallet_migrated(session, coin_wallet, height):
             .filter_by(varname="migration_from_block_started", network_name=network)
             .first()
         )
-        last_block = CoinWallet().get_last_block_number()
+        last_block = NodeService().get_last_block_number()
         if migration_block_started:
             migration_block_started.value = last_block
         else:
@@ -406,7 +406,6 @@ def _migrate_btc():
 
     app = create_app()
     app.app_context().push()
-    coin_wallet = CoinWallet()
     from app.lib.wallets import Wallet, DbWallet, wallets_list, wallet_delete, db
 
     try:

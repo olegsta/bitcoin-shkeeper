@@ -1,7 +1,7 @@
 import time
 from app.logging import logger
 from app.config import config, COIN
-from app.wallet import CoinWallet
+from app.services import NodeService, WalletService
 from app.tasks import migrate_wallet_task
 from app.models import DbCacheVars
 from app.lib.services.services import Service
@@ -16,15 +16,16 @@ def handle_event(transaction):
     logger.info(f'new transaction: {transaction!r}')
 
 def log_loop():
-    coin_wallet = CoinWallet()
-    wallet = coin_wallet.wallet()
+    wallet_service = WalletService()
+    node_service = NodeService()
+    wallet = wallet_service.wallet()
     while wallet is None:
         logger.warning("Wallet not loaded yet, waiting 10 seconds...")
         time.sleep(10)
-        wallet = coin_wallet.wallet()
+        wallet = wallet_service.wallet()
     default_check_interval = int(config.get("CHECK_NEW_BLOCK_EVERY_SECONDS", 60))
     srv = Service(config['COIN_NETWORK'])
-    latest_height = coin_wallet.get_last_block_number()
+    latest_height = node_service.get_last_block_number()
     # value = 917515
     value = wallet.session.query(DbCacheVars.value).filter_by(
         varname='last_scanned_block',
@@ -46,7 +47,7 @@ def log_loop():
     else:
         current_height = int(value)
     while True:
-        latest_height = coin_wallet.get_last_block_number()
+        latest_height = node_service.get_last_block_number()
         logger.info(f"latest_height {latest_height}")
         logger.info(f"current_height {current_height}")
         safe_latest_height = max(0, latest_height - config['SAFE_CONFIRMATIONS'])
@@ -93,8 +94,8 @@ def events_listener():
                 wait_until_node_synced(max_delta_minutes=30)
                 _node_synced = True
 
-            coin_wallet = CoinWallet()
-            wallet = coin_wallet.wallet()
+            wallet_service = WalletService()
+            wallet = wallet_service.wallet()
             now = datetime.utcnow()
 
             migration_flag = wallet.session.query(DbCacheVars).filter_by(
@@ -176,7 +177,7 @@ def events_listener():
                     time.sleep(60)
                     continue
 
-                wallet = coin_wallet.wallet()
+                wallet = wallet_service.wallet()
                 migration_done = wallet.session.query(DbCacheVars).filter_by(
                     varname="wallet_migrated",
                     network_name=wallet.network.name
@@ -201,12 +202,12 @@ def wait_for_account_password(interval=20):
         time.sleep(interval)
 
 def wait_until_node_synced(max_delta_minutes=30, check_interval=120, error_interval=60):
-    coin_wallet = CoinWallet()
+    node_service = NodeService()
     max_delta_seconds = max_delta_minutes * 60
 
     while True:
         try:
-            info = coin_wallet.getblockchaininfo()
+            info = node_service.getblockchaininfo()
             logger.info(f"Retrieved blockchain info: {info}")
         except Exception as e:
             logger.exception(f"Failed to get blockchain info: {e}")

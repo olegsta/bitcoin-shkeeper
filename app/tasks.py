@@ -7,7 +7,7 @@ import requests as rq
 from .celery_app import celery
 from .config import config
 from .utils import skip_if_running
-from .wallet import CoinWallet
+from .services import PayoutService, WalletService
 from .logging import logger
 from .payout_lock import payout_lock
 from app.config import COIN
@@ -22,7 +22,7 @@ def migrate_wallet_task():
 @celery.task()
 def make_multipayout(symbol, payout_list, fee):
     if symbol == COIN:
-        w = CoinWallet()
+        w = PayoutService()
         logger.warning(f"Starting payout {payout_list}")
         with payout_lock():
             payout_results = w.make_multipayout(payout_list, fee)
@@ -34,7 +34,7 @@ def make_multipayout(symbol, payout_list, fee):
 @celery.task()
 def withdraw_to_external_wallet_task(symbol, payout_list):
     if symbol == COIN:
-        w = CoinWallet()
+        w = PayoutService()
         logger.warning(f"Starting withdraw_to_external_wallet_task {payout_list}")
         with payout_lock():
             payout_results = w.withdraw_to_external_wallet_task(payout_list)
@@ -59,7 +59,7 @@ def post_payout_results(data, symbol):
 @celery.task()
 def create_wallet(self):
     print("job generate_address")
-    w = CoinWallet()
+    w = WalletService()
     address = w.generate_address()
     return address
 

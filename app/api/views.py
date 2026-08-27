@@ -1,18 +1,17 @@
-from flask import current_app, g, jsonify
+from flask import g, jsonify
+
 from app.logging import logger
-from app.config import config
-from . import api
-from app import create_app
-from app.lib.values import Value
-from app.wallet import CoinWallet
+from app.services import NodeService, TransactionLookupService, WalletService
 from app.utils import block_during_migration
+
+from . import api
+
 
 @api.post("/generate-address")
 @block_during_migration
 def generate_new_address():
     logger.warning("generate-address request started for symbol=%s", g.symbol)
-    w = CoinWallet()
-    new_address = w.generate_address()
+    new_address = WalletService().generate_address()
     logger.warning("generate-address request result symbol=%s address=%s", g.symbol, new_address)
     if not new_address:
         logger.error("Failed to generate address for symbol=%s", g.symbol)
@@ -22,41 +21,38 @@ def generate_new_address():
         }), 500
     return {'status': 'success', 'address': new_address}
 
+
 @api.post('/balance')
 def get_balance():
-    w = CoinWallet()
-    balance = w.get_deposit_account_balance()
+    balance = WalletService().get_deposit_account_balance()
     return {'status': 'success', 'balance': balance}
+
 
 @api.post('/status')
 @block_during_migration
 def get_status():
-    w = CoinWallet()
-    delta_blocks = w.delta_synced_block()
+    delta_blocks = NodeService().delta_synced_block()
     return {'status': 'success', 'delta_blocks': delta_blocks}
+
 
 @api.post('/transaction/<txid>')
 def get_transaction(txid):
-    w = CoinWallet()
-    transaction = w.get_transaction(txid)
+    transaction = TransactionLookupService().get_transaction(txid)
     if not transaction:
         logger.error(f"Cannot receive outputs {txid}: {transaction}")
         return []
 
-    related_transactions = []
     confirmations = transaction.get("confirmations") or 1
-    for detail in transaction.get("details", []):
-        address = detail.get("address")
-        amount = detail.get('amount', 0)
-        category = detail.get("category", "change")
-        related_transactions.append([
-            address,
-            amount,
+    related_transactions = [
+        [
+            detail.get("address"),
+            detail.get('amount', 0),
             confirmations,
-            category
-        ])
+            detail.get("category", "change"),
+        ]
+        for detail in transaction.get("details", [])
+    ]
 
-    # return related_transactions
     if not related_transactions:
         logger.warning(f"txid {txid} is not related to any known address for {g.symbol}")
         return []
@@ -64,18 +60,17 @@ def get_transaction(txid):
     logger.warning(related_transactions)
     return related_transactions
 
+
 @api.post('/dump')
 def dump():
-    w = CoinWallet()
-    all_wallets = w.get_dump()
-    return all_wallets
+    return WalletService().get_dump()
+
 
 @api.post('/fee-deposit-account')
 def get_fee_deposit_account():
     return {'account': "", 'balance': 0}
 
+
 @api.post('/get_all_addresses')
 def get_all_addresses():
-    w = CoinWallet()
-    all_addresses_list = w.get_all_accounts()
-    return all_addresses_list
+    return WalletService().get_all_accounts()
