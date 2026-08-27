@@ -217,6 +217,27 @@ class BitcoindClient(BaseClient):
         return txs
 
 
+    def parse_block_txs(self, txs_list, txids):
+        wanted = set(txids or [])
+        if not wanted or not txs_list:
+            return []
+        block_hash = txs_list.get('hash')
+        block_height = txs_list.get('height')
+        block_time = txs_list.get('time')
+        confirmations = txs_list.get('confirmations')
+        parsed = []
+        for tx in txs_list.get('tx', []):
+            tx_id = tx.get('txid')
+            if tx_id not in wanted:
+                continue
+            try:
+                parsed.append(
+                    self._parse_transaction_new(tx, block_height, block_hash, block_time, confirmations)
+                )
+            except Exception as e:
+                _logger.error(f"Failed to parse tx {tx_id}: {e}")
+        return parsed
+
     def getblocktransactions(self, block_hash):
         _logger.warning("REQUEST getblocktransactions")
         txs_list = self.proxy.getblock(block_hash, 3)
