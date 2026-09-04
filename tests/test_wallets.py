@@ -145,14 +145,41 @@ class TestPayoutLock(unittest.TestCase):
         mock_client.lock.return_value = mock_lock
         mock_redis_cls.from_url.return_value = mock_client
 
-        with payout_lock(timeout=10, blocking_timeout=10):
+        with payout_lock(store_id=1, timeout=10, blocking_timeout=10):
             pass
 
-        _, lock_kwargs = mock_client.lock.call_args
+        lock_args, lock_kwargs = mock_client.lock.call_args
+        from app.config import COIN
+        self.assertEqual(lock_args[0], f"{COIN}:payout_lock:1")
         self.assertEqual(lock_kwargs["timeout"], 10)
         self.assertFalse(lock_kwargs["thread_local"])
         mock_lock.acquire.assert_called_once_with(blocking=True)
         mock_lock.release.assert_called_once()
+
+    @patch("app.payout_lock.redis.Redis")
+    def test_payout_lock_is_scoped_by_store_id(self, mock_redis_cls):
+        from app.config import COIN
+        from app.payout_lock import payout_lock
+
+        mock_client = MagicMock()
+        mock_lock = MagicMock()
+        mock_lock.acquire.return_value = True
+        mock_client.lock.return_value = mock_lock
+        mock_redis_cls.from_url.return_value = mock_client
+
+        with payout_lock(store_id=2, timeout=10, blocking_timeout=10):
+            pass
+
+        lock_args, _ = mock_client.lock.call_args
+        self.assertEqual(lock_args[0], f"{COIN}:payout_lock:2")
+
+    def test_payout_lock_requires_store_id(self):
+        from app.payout_lock import payout_lock
+
+        with self.assertRaises(ValueError) as ctx:
+            with payout_lock(timeout=10, blocking_timeout=10):
+                pass
+        self.assertIn("store_id is required", str(ctx.exception))
 
     def test_lock_heartbeat_extends_ttl_until_stopped(self):
         from app.payout_lock import _lock_heartbeat
@@ -179,3 +206,91 @@ class TestPayoutLock(unittest.TestCase):
 
         lock.reacquire.assert_called_once()
         self.assertEqual(stop_event.wait.call_count, 1)
+
+
+class TestSplitScanHits(unittest.TestCase):
+    def test_routes_tx_to_owning_wallets(self):
+        from app.lib.wallets import split_scan_hits
+
+        related = {"tx1": {"bc1qa", "bc1qb"}}
+        addresses = {"bc1qa", "bc1qb", "bc1qc"}
+        mapping = {
+            "bc1qa": {1},
+            "bc1qb": {2},
+            "bc1qc": {1},
+        }
+        per_related, per_addrs = split_scan_hits(related, addresses, mapping)
+        self.assertEqual(per_related[1], {"tx1": {"bc1qa"}})
+        self.assertEqual(per_related[2], {"tx1": {"bc1qb"}})
+        self.assertEqual(per_addrs[1], {"bc1qa", "bc1qc"})
+        self.assertEqual(per_addrs[2], {"bc1qb"})
+
+    def test_unknown_address_is_ignored(self):
+        from app.lib.wallets import split_scan_hits
+
+        per_related, per_addrs = split_scan_hits(
+            {"tx1": {"bc1qunknown"}},
+            {"bc1qunknown"},
+            {},
+        )
+        self.assertEqual(per_related, {})
+        self.assertEqual(per_addrs, {})
+
+
+class TestScanBlock(unittest.TestCase):
+    def _wallet(self, wallet_id, srv):
+        wallet = Wallet.__new__(Wallet)
+        wallet.wallet_id = wallet_id
+        wallet.network = MagicMock()
+        wallet.network.name = "bitcoin"
+        wallet._build_service = MagicMock(return_value=srv)
+        wallet._session = MagicMock()
+        wallet._get_fixed_addresses_if_needed = MagicMock(return_value=None)
+        wallet._process_transactions = MagicMock(return_value=(set(), {}, 0))
+        wallet._update_db_transactions = MagicMock()
+        wallet._store_related_block_txs = MagicMock()
+        wallet._scan_keys_loop = MagicMock()
+        wallet._finalize_scan = MagicMock()
+        return wallet
+
+    @patch("app.lib.wallets.COIN", "BTC")
+    def test_fetches_block_once_for_many_wallets(self):
+        srv = MagicMock()
+        srv.getblocktransactions.return_value = {"tx": []}
+        w1 = self._wallet(1, srv)
+        w2 = self._wallet(2, srv)
+
+        with patch.object(Wallet, "_load_addresses_by_wallet", return_value=({}, set())):
+            Wallet.scan_block([w1, w2], block="hash", current_block_height=10)
+
+        srv.getblocktransactions.assert_called_once_with("hash")
+        w1._update_db_transactions.assert_called_once()
+        w2._update_db_transactions.assert_called_once()
+        w1._store_related_block_txs.assert_not_called()
+        w2._store_related_block_txs.assert_not_called()
+        w1._finalize_scan.assert_called_once()
+        w2._finalize_scan.assert_not_called()
+
+    @patch("app.lib.wallets.COIN", "BTC")
+    def test_stores_related_txs_on_owning_wallet(self):
+        srv = MagicMock()
+        srv.getblocktransactions.return_value = {"tx": [{"txid": "tx1"}]}
+        w1 = self._wallet(1, srv)
+        w2 = self._wallet(2, srv)
+        w1._process_transactions.return_value = (
+            {"bc1qa"},
+            {"tx1": {"bc1qa"}},
+            1,
+        )
+
+        with patch.object(
+            Wallet,
+            "_load_addresses_by_wallet",
+            return_value=({"bc1qa": {1}}, {"bc1qa"}),
+        ):
+            Wallet.scan_block([w1, w2], block="hash", current_block_height=10)
+
+        w1._store_related_block_txs.assert_called_once()
+        related = w1._store_related_block_txs.call_args[0][1]
+        self.assertEqual(related, {"tx1": {"bc1qa"}})
+        w2._store_related_block_txs.assert_not_called()
