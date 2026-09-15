@@ -52,6 +52,29 @@ class TestMarkUtxosSpent(unittest.TestCase):
         wallet.session.execute.assert_not_called()
 
 
+class TestOwnedChangeKey(unittest.TestCase):
+    def test_accepts_key_from_this_wallet(self):
+        wallet = Wallet.__new__(Wallet)
+        wallet.wallet_id = 7
+        wallet._session = MagicMock()
+        own_key = MagicMock(wallet_id=7)
+        with patch("app.lib.wallets.WalletKey", return_value=own_key) as key_cls:
+            result = wallet._owned_change_key(11)
+
+        self.assertIs(result, own_key)
+        key_cls.assert_called_once_with(11, wallet.session)
+
+    def test_rejects_key_from_another_wallet(self):
+        wallet = Wallet.__new__(Wallet)
+        wallet.wallet_id = 7
+        wallet._session = MagicMock()
+        other_key = MagicMock(wallet_id=8)
+        with patch("app.lib.wallets.WalletKey", return_value=other_key):
+            with self.assertRaises(WalletError) as ctx:
+                wallet._owned_change_key(99)
+        self.assertIn("does not belong to this wallet", str(ctx.exception))
+
+
 class TestPersistSentTransaction(unittest.TestCase):
     def _make_wallet_transaction(self):
         wt = WalletTransaction.__new__(WalletTransaction)
@@ -294,3 +317,21 @@ class TestScanBlock(unittest.TestCase):
         related = w1._store_related_block_txs.call_args[0][1]
         self.assertEqual(related, {"tx1": {"bc1qa"}})
         w2._store_related_block_txs.assert_not_called()
+
+    @patch("app.lib.wallets.COIN", "LTC")
+    def test_ltc_scans_when_only_fixed_addresses_match(self):
+        srv = MagicMock()
+        srv.getblocktransactions.return_value = {"tx": [{"txid": "tx1"}]}
+        w1 = self._wallet(1, srv)
+        w2 = self._wallet(2, srv)
+        w1._get_fixed_addresses_if_needed.return_value = ["Lfixed"]
+        w1._process_transactions.return_value = (set(), {}, 0)
+
+        with patch.object(Wallet, "_load_addresses_by_wallet", return_value=({}, set())):
+            Wallet.scan_block([w1, w2], block="hash", current_block_height=10)
+
+        w1._scan_keys_loop.assert_called_once()
+        w2._scan_keys_loop.assert_called_once()
+        args, kwargs = w1._scan_keys_loop.call_args
+        self.assertEqual(args[1], set())
+        self.assertEqual(args[2], ["Lfixed"])

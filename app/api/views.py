@@ -3,7 +3,7 @@ from flask import g, jsonify, request
 from app.logging import logger
 from app.services import NodeService, TransactionLookupService, WalletService
 from app.services import store as store_service
-from app.utils import block_during_migration
+from app.utils import _json_error, block_during_migration
 
 from . import api
 
@@ -43,8 +43,12 @@ def get_balance():
         store_id = _request_store_id()
         balance = WalletService().get_store_balance(store_id=store_id)
     except ValueError as exc:
-        logger.warning("Balance request failed for %s: %s", g.symbol, exc)
+        logger.warning("Balance request failed for %s: %s", getattr(g, "symbol", "?"), exc)
         return {"status": "error", "msg": str(exc)}, 400
+    except PermissionError as exc:
+        msg = str(exc)
+        status = 503 if "locked" in msg.lower() else 403
+        return _json_error(msg, status)
     return {'status': 'success', 'balance': balance}
 
 
@@ -57,7 +61,12 @@ def get_status():
 
 @api.post('/transaction/<txid>')
 def get_transaction(txid):
-    transaction = TransactionLookupService().get_transaction(txid)
+    try:
+        store_id = _request_store_id()
+    except ValueError as exc:
+        return {"status": "error", "msg": str(exc)}, 400
+
+    transaction = TransactionLookupService().get_transaction(txid, store_id=store_id)
     if not transaction:
         logger.error(f"Cannot receive outputs {txid}: {transaction}")
         return []
@@ -75,8 +84,9 @@ def get_transaction(txid):
 
     if not related_transactions:
         logger.warning(
-            "txid %s has no wallet-owned outputs; returning confirmations=%s",
+            "txid %s has no wallet-owned outputs for store_id=%s; returning confirmations=%s",
             txid,
+            store_id,
             confirmations,
         )
         return [["", 0, confirmations, "change"]]
@@ -89,9 +99,13 @@ def get_transaction(txid):
 def dump():
     try:
         store_id = _request_store_id()
+        return WalletService().get_dump(store_id=store_id, scoped=True)
     except ValueError as exc:
         return {"status": "error", "msg": str(exc)}, 400
-    return WalletService().get_dump(store_id=store_id, scoped=True)
+    except PermissionError as exc:
+        msg = str(exc)
+        status = 503 if "locked" in msg.lower() else 403
+        return _json_error(msg, status)
 
 
 @api.post('/fee-deposit-account')
@@ -107,6 +121,10 @@ def get_fee_deposit_account():
         }
     except ValueError as exc:
         return {"status": "error", "msg": str(exc)}, 400
+    except PermissionError as exc:
+        msg = str(exc)
+        status = 503 if "locked" in msg.lower() else 403
+        return _json_error(msg, status)
 
 
 @api.post('/get_all_addresses')

@@ -66,7 +66,9 @@ class TestWithdrawToExternalWallet:
     @patch("app.tasks.post_payout_results")
     @patch("app.tasks.PayoutService")
     def test_uses_store_scoped_lock(self, payout_cls, post_payout_results, payout_lock):
-        payout_instance = payout_cls.return_value
+        # unsafe: MagicMock treats assert_* as unittest assertions.
+        payout_instance = MagicMock(unsafe=True)
+        payout_cls.return_value = payout_instance
         payout_instance.withdraw_to_external_wallet_task.return_value = [{"status": "success"}]
         post_payout_results.delay = MagicMock()
         payout_lock.return_value.__enter__ = MagicMock()
@@ -81,7 +83,7 @@ class TestWithdrawToExternalWallet:
         )
         payout_lock.assert_called_once_with(store_id=2)
         payout_instance.withdraw_to_external_wallet_task.assert_called_once_with(
-            [{"source": "bc1qsrc", "dest": "bc1qdst"}]
+            [{"source": "bc1qsrc", "dest": "bc1qdst"}], store_id=2
         )
 
     @patch("app.tasks.payout_lock")
@@ -90,7 +92,8 @@ class TestWithdrawToExternalWallet:
     def test_source_store_mismatch_skips_lock(
         self, payout_cls, post_payout_results, payout_lock
     ):
-        payout_instance = payout_cls.return_value
+        payout_instance = MagicMock(unsafe=True)
+        payout_cls.return_value = payout_instance
         payout_instance.assert_sources_belong_to_store.side_effect = Exception(
             "Source address 'bc1qsrc' does not belong to store_id=2"
         )

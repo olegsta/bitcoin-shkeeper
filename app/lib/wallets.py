@@ -17,7 +17,7 @@ from app.lib.values import Value, value_to_satoshi
 from app.lib.services.services import Service
 from app.lib.transactions import Input, Output, Transaction, get_unlocking_script_type, TransactionError
 from app.lib.main import *
-from sqlalchemy import func, or_, asc, text, exists, select, bindparam
+from sqlalchemy import func, or_, asc, text, exists, bindparam
 from sqlalchemy.exc import OperationalError
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from functools import lru_cache
@@ -217,7 +217,7 @@ class WalletKey(object):
     @staticmethod
     def from_key(name, wallet_id, session, key, account_id=0, network=None, change=0, purpose=84, parent_id=0,
                  path='m', key_type=None, encoding=None, witness_type=DEFAULT_WITNESS_TYPE,
-                 new_key_id=None):
+                 new_key_id=None, commit=None):
         key_is_address = False
         if isinstance(key, HDKey):
             k = key
@@ -241,12 +241,8 @@ class WalletKey(object):
             encoding = get_encoding_from_witness(witness_type)
         script_type = script_type_default(witness_type)
 
-        if not new_key_id:
-            key_id_max = session.query(func.max(DbKey.id)).scalar()
-            new_key_id = key_id_max + 1 if key_id_max else None
-            commit = True
-        else:
-            commit = False
+        if commit is None:
+            commit = new_key_id is None
 
         if not key_is_address:
             if key_type != 'single' and k.depth != len(path.split('/'))-1:
@@ -297,6 +293,8 @@ class WalletKey(object):
         # if commit:
         #     session.merge(DbNetwork(name=network))
         session.add(nk)
+        if nk.id is None:
+            session.flush()
         if commit:
             session.commit()
         return WalletKey(nk.id, session, k)
@@ -685,12 +683,11 @@ class WalletTransaction(Transaction):
         # Single batched query for all keys
         keys_by_address = {}
         if all_addresses:
-            stmt = select(DbKey.id, DbKey.address).where(
+            keys = sess.query(DbKey).filter(
                 DbKey.address.in_(all_addresses),
                 DbKey.wallet_id == self.hdwallet.wallet_id,
-            )
-            result = sess.execute(stmt)
-            keys_by_address = {row.address: DbKey(id=row.id, address=row.address) for row in result}
+            ).all()
+            keys_by_address = {key.address: key for key in keys}
             _logger.debug(f"batch key lookup complete: {len(keys_by_address)} keys found")
 
         # Pre-fetch existing inputs and outputs in batch
@@ -871,27 +868,23 @@ class Wallet(object):
             session.flush()
             new_wallet_id = new_wallet.id
 
-            key_id_max = session.query(func.max(DbKey.id)).scalar()
-            new_key_id = (key_id_max or 0) + 1
-
             if scheme == 'bip32':
                 mk = WalletKey.from_key(
                     key=key, name=name, session=session, wallet_id=new_wallet_id, network=network,
                     account_id=account_id, purpose=purpose, key_type='bip32', encoding=encoding,
-                    witness_type=witness_type, path=base_path, new_key_id=new_key_id)
+                    witness_type=witness_type, path=base_path, commit=False)
                 new_wallet.main_key_id = mk.key_id
 
                 w = cls(new_wallet_id, db_cache_uri=db_cache_uri, main_key_object=mk.key(), session=session)
-                session.commit()
-
                 w.key_for_path([], account_id=account_id, change=0, address_index=0)
+                session.commit()
             else:  # scheme == 'single': # DOGE
                 if not key:
                     key = HDKey(network=network, depth=key_depth)
                 mk = WalletKey.from_key(
                     key=key, name=name, session=session, wallet_id=new_wallet_id, network=network,
                     account_id=account_id, purpose=purpose, key_type='single', encoding=encoding,
-                    witness_type=witness_type, new_key_id=new_key_id)
+                    witness_type=witness_type, commit=False)
                 new_wallet.main_key_id = mk.key_id
 
                 w = cls(new_wallet_id, db_cache_uri=db_cache_uri, main_key_object=mk.key(), session=session)
@@ -1340,7 +1333,7 @@ class Wallet(object):
             if COIN == "BTC":
                 if related:
                     wallet._store_related_block_txs(txs_list, related)
-            elif addrs:
+            elif addrs or fixed_addresses:
                 wallet._scan_keys_loop(txs_list, addrs, fixed_addresses, 0, network)
 
         lead._finalize_scan(
@@ -1774,7 +1767,6 @@ class Wallet(object):
                     self.key(parent_id)
                 topkey = self._key_objects[new_keys[0].parent_id]
                 parent_key = topkey.key()
-                new_key_id = self.session.query(DbKey.id).order_by(DbKey.id.desc()).first()[0] + 1
                 hardened_child = False
                 if fullpath[-1].endswith("'"):
                     hardened_child = True
@@ -1782,7 +1774,6 @@ class Wallet(object):
                                                            int(fullpath[-1].strip("'")) + number_of_keys)]
 
                 for key_idx in keys_to_add:
-                    new_key_id += 1
                     if hardened_child:
                         key_idx = "%s'" % key_idx
                     ck = parent_key.subkey_for_path(key_idx, network=network)
@@ -1791,8 +1782,8 @@ class Wallet(object):
                     new_keys.append(WalletKey.from_key(
                         key=ck, name=key_name, wallet_id=self.wallet_id, account_id=account_id,
                         change=change, purpose=purpose, path=newpath, parent_id=parent_id,
-                        encoding=encoding, witness_type=witness_type, new_key_id=new_key_id,
-                        network=network, session=self.session))
+                        encoding=encoding, witness_type=witness_type,
+                        commit=False, network=network, session=self.session))
                 self.session.commit()
 
         return new_keys
@@ -2437,6 +2428,12 @@ class Wallet(object):
             _logger.info(f"Transaction inputs {inputs}")
             return inputs
 
+    def _owned_change_key(self, change_key_id):
+        change_key = WalletKey(change_key_id, self.session)
+        if change_key.wallet_id != self.wallet_id:
+            raise WalletError("Change key does not belong to this wallet")
+        return change_key
+
     def transaction_create(self, output_arr, input_arr=None, input_key_id=None, account_id=None, network=None, fee=None,
                            min_confirms=1, max_utxos=None, locktime=0, number_of_change_outputs=1,
                            random_output_order=True, replace_by_fee=False, fee_per_kb=None, change_key_id=None):
@@ -2636,7 +2633,7 @@ class Wallet(object):
 
             if change_key_id:
                 number_of_change_outputs = 1
-                change_keys = [WalletKey(change_key_id, self.session)]
+                change_keys = [self._owned_change_key(change_key_id)]
             elif self.scheme == 'single':
                 change_keys = [self.get_key(account_id, self.witness_type, network, change=0)]
             else:
