@@ -5,6 +5,8 @@ import pymysql
 from sqlalchemy.exc import OperationalError
 
 from app.lib.wallets import Wallet, WalletTransaction, WalletError, _is_deadlock_error
+from app.lib.values import Value
+from app.wallet import CoinWallet
 
 
 class TestDeadlockErrorDetection(unittest.TestCase):
@@ -179,3 +181,100 @@ class TestPayoutLock(unittest.TestCase):
 
         lock.reacquire.assert_called_once()
         self.assertEqual(stop_event.wait.call_count, 1)
+
+
+def _tx_io(address, value, key_id=None):
+    io = MagicMock()
+    io.address = address
+    io.value = value
+    io.key_id = key_id
+    return io
+
+
+class TestGetTransaction(unittest.TestCase):
+    TXID = "2c9b86608d206b0ce5b85b1de261197817cd29ecb799c1c55f636b7713e74cef"
+
+    def _wallet_with_tx(self, inputs, outputs, confirmations=2, output_total=None):
+        tx = MagicMock()
+        tx.inputs = inputs
+        tx.outputs = outputs
+        tx.confirmations = confirmations
+        tx.output_total = output_total if output_total is not None else sum(o.value for o in outputs)
+        wallet = CoinWallet.__new__(CoinWallet)
+        wallet.get_tx_by_txid = MagicMock(return_value=tx)
+        return wallet
+
+    def test_payout_to_external_address_is_send(self):
+        wallet = self._wallet_with_tx(
+            inputs=[_tx_io("bc1qwallet", 45511838, key_id=1)],
+            outputs=[_tx_io("bc1qexternal", 45500000, key_id=None)],
+        )
+
+        result = wallet.get_transaction(self.TXID)
+
+        self.assertEqual(result["confirmations"], 2)
+        self.assertEqual(len(result["details"]), 1)
+        address, amount, category = (
+            result["details"][0]["address"],
+            result["details"][0]["amount"],
+            result["details"][0]["category"],
+        )
+        self.assertEqual(address, "bc1qexternal")
+        self.assertEqual(amount, Value.from_satoshi(45500000).value)
+        self.assertEqual(category, "send")
+
+    def test_incoming_payment_is_receive(self):
+        wallet = self._wallet_with_tx(
+            inputs=[_tx_io("bc1qstranger", 100000, key_id=None)],
+            outputs=[_tx_io("bc1qwallet", 100000, key_id=7)],
+        )
+
+        result = wallet.get_transaction(self.TXID)
+
+        self.assertEqual(result["details"], [{
+            "address": "bc1qwallet",
+            "amount": Value.from_satoshi(100000).value,
+            "category": "receive",
+        }])
+
+    def test_payout_with_change_returns_send_and_receive(self):
+        wallet = self._wallet_with_tx(
+            inputs=[_tx_io("bc1qwallet", 200000, key_id=1)],
+            outputs=[
+                _tx_io("bc1qexternal", 150000, key_id=None),
+                _tx_io("bc1qchange", 49000, key_id=2),
+            ],
+        )
+
+        result = wallet.get_transaction(self.TXID)
+        categories = {d["address"]: d["category"] for d in result["details"]}
+
+        self.assertEqual(categories["bc1qexternal"], "send")
+        self.assertEqual(categories["bc1qchange"], "receive")
+
+    def test_payout_without_outputs_still_returns_send(self):
+        wallet = self._wallet_with_tx(
+            inputs=[_tx_io("bc1qwallet", 45511838, key_id=1)],
+            outputs=[],
+            output_total=45500000,
+        )
+
+        result = wallet.get_transaction(self.TXID)
+
+        self.assertEqual(result["details"][0]["category"], "send")
+        self.assertEqual(result["details"][0]["address"], "bc1qwallet")
+        self.assertEqual(
+            result["details"][0]["amount"],
+            Value.from_satoshi(45500000).value,
+        )
+
+    def test_unrelated_transaction_is_ignored(self):
+        wallet = self._wallet_with_tx(
+            inputs=[_tx_io("bc1qstranger", 100000, key_id=None)],
+            outputs=[_tx_io("bc1qother", 99000, key_id=None)],
+        )
+
+        result = wallet.get_transaction(self.TXID)
+
+        self.assertEqual(result["details"], [])
+        self.assertEqual(result["confirmations"], 2)

@@ -30,25 +30,33 @@ class CoinWallet():
         tx = self.get_tx_by_txid(txid_hex)
         if not tx:
             return None
-        # balance_satoshi = 0
         details = []
+        has_wallet_inputs = any(inp.key_id is not None for inp in tx.inputs)
         for out in tx.outputs:
-            if out.key_id is None:
-              continue
-            addr = out.address
-            # balance_satoshi += out.value
-            # val = Value.from_satoshi(balance_satoshi).value
-            val = Value.from_satoshi(out.value).value
+            if out.key_id is not None:
+                category = "receive"
+            elif has_wallet_inputs:
+                # Payout / sweep: destination is not a wallet key, so key_id is NULL.
+                category = "send"
+            else:
+                continue
             details.append({
-                'address': addr,
-                'amount': val,
-                'category': 'receive'
+                "address": out.address,
+                "amount": Value.from_satoshi(out.value).value,
+                "category": category,
+            })
+        if not details and has_wallet_inputs:
+            first_input = next((inp for inp in tx.inputs if inp.address), None)
+            details.append({
+                "address": first_input.address if first_input else None,
+                "amount": Value.from_satoshi(tx.output_total or 0).value,
+                "category": "send",
             })
 
         return {
-            'txid': txid_hex,
-            'confirmations': getattr(tx, 'confirmations', 0),
-            'details': details
+            "txid": txid_hex,
+            "confirmations": getattr(tx, "confirmations", 0),
+            "details": details,
         }
 
     def delta_synced_block(self):
