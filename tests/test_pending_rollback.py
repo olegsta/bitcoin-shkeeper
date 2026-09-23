@@ -35,7 +35,7 @@ def test_store_wallet_after_stale_connection():
     try:
         app = _worker_app(db_path)
         with app.app_context():
-            db.create_all()
+            DbWallet.__table__.create(bind=db.engine, checkfirst=True)
             db.session.add(
                 DbWallet(
                     name=WALLET_NAME,
